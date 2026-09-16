@@ -1131,7 +1131,7 @@ private fun AppScreens(
                 item(key = "mixed_box_action") {
                     TextButton(
                         onClick = { addingMixedBox = true },
-                        modifier = Modifier.padding(horizontal = edge).fillMaxWidth(),
+                        modifier = Modifier.padding(edge).fillMaxWidth(),
                     ) { Text("باکس چندارزی بساز", fontSize = 14.sp) }
                 }
             }
@@ -1221,7 +1221,7 @@ private fun AppScreens(
                                 "برای اضافه کردن دارایی، یک مورد رو باز کن و این باکس رو انتخاب کن.",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 14.sp,
-                                modifier = Modifier.padding(horizontal = edge, vertical = Space.m),
+                                modifier = Modifier.padding(edge).padding(vertical = Space.m),
                             )
                         }
                     } else itemsIndexed(held, key = { _, h -> "mixed_${box.id}_${h.key}" }) { i, h ->
