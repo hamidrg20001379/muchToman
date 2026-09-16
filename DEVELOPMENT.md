@@ -266,6 +266,13 @@ gh secret set KEYSTORE_STORE_PASSWORD
 
 Plus `KEYSTORE_KEY_ALIAS` and `KEYSTORE_KEY_PASSWORD` the same way.
 
+The Gradle configuration cache is encrypted before GitHub Actions stores it. Set its one-time
+repository secret to let the CI workflows reuse that cache too:
+
+```bash
+openssl rand -base64 16 | gh secret set GRADLE_CACHE_ENCRYPTION_KEY
+```
+
 ## Typography
 
 The app is set in **Modam**, shipped as one variable font at
