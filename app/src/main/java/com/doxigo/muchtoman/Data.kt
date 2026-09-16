@@ -50,12 +50,54 @@ data class Holding(
      * asset id was the identity; [key], not this, is what anything else should compare.
      */
     val id: String = "",
+    /** A mixed-currency box groups rows without converting or duplicating their balances. */
+    val boxId: String = "",
 ) {
     /** What to print for this holding. Never blank: the asset's own name is the fallback. */
     fun nameOr(default: String): String = label.ifBlank { default }
 
     /** This one holding, for as long as it exists. Unique across the list. */
     val key: String get() = id.ifBlank { typeId }
+}
+
+/** A named view of several holdings; the holdings themselves remain the financial record. */
+@Serializable
+data class MixedBox(val id: String, val name: String) {
+    init {
+        require(id.isNotBlank())
+        require(name.isNotBlank())
+    }
+}
+
+/**
+ * One movement between two named holdings — «باکس‌ها» in the personal tracker UI.
+ *
+ * The balances remain the source of the portfolio total, while this is the small local audit
+ * trail explaining why two compatible boxes changed together. A cross-unit exchange needs its
+ * own quoted rate and is intentionally not disguised as a transfer.
+ */
+@Serializable
+data class BoxTransfer(
+    val id: String,
+    val fromKey: String,
+    val toKey: String,
+    val amount: Double,
+    val at: Long,
+)
+
+/** The one safe box movement: manual boxes of one native unit, with no invented conversion. */
+fun moveBetweenBoxes(boxes: List<Holding>, fromKey: String, toKey: String, amount: Double): List<Holding>? {
+    if (!amount.isFinite() || amount <= 0.0 || fromKey == toKey) return null
+    val from = boxes.firstOrNull { it.key == fromKey } ?: return null
+    val to = boxes.firstOrNull { it.key == toKey } ?: return null
+    if (from.wallet != null || to.wallet != null || from.typeId != to.typeId || from.amount < amount) return null
+    return boxes.map {
+        when (it.key) {
+            fromKey -> it.copy(amount = it.amount - amount)
+            toKey -> it.copy(amount = it.amount + amount)
+            else -> it
+        }
+    }
 }
 
 /** A fresh [Holding.id]. Only ever called when she adds one, so uniqueness is all it owes. */
@@ -683,6 +725,34 @@ class Store(context: Context) {
         fallback = { emptyList() },
     )
 
+    private val boxTransfersBlob = CachedBlob(
+        "boxTransfers",
+        decode = { JSON.decodeFromString<List<BoxTransfer>>(it) },
+        encode = { JSON.encodeToString(it) },
+        fallback = { emptyList() },
+    )
+
+    private val mixedBoxesBlob = CachedBlob(
+        "mixedBoxes",
+        decode = { JSON.decodeFromString<List<MixedBox>>(it) },
+        encode = { JSON.encodeToString(it) },
+        fallback = { emptyList() },
+    )
+
+    private val installmentsBlob = CachedBlob(
+        "installments",
+        decode = { JSON.decodeFromString<List<InstallmentPlan>>(it) },
+        encode = { JSON.encodeToString(it) },
+        fallback = { emptyList() },
+    )
+
+    private val installmentPaymentsBlob = CachedBlob(
+        "installmentPayments",
+        decode = { JSON.decodeFromString<List<InstallmentPayment>>(it) },
+        encode = { JSON.encodeToString(it) },
+        fallback = { emptyList() },
+    )
+
     private val ratesBlob = CachedBlob(
         "rates",
         decode = { sanitizeRates(JSON.decodeFromString<Rates>(it), BuildConfig.RATES_URL) },
@@ -702,6 +772,23 @@ class Store(context: Context) {
     var holdings: List<Holding>
         get() = holdingsBlob.get()
         set(v) = holdingsBlob.set(v)
+
+    /** Recent box movements; the balance rows remain the authoritative amount. */
+    var boxTransfers: List<BoxTransfer>
+        get() = boxTransfersBlob.get()
+        set(v) = boxTransfersBlob.set(v)
+
+    var mixedBoxes: List<MixedBox>
+        get() = mixedBoxesBlob.get()
+        set(v) = mixedBoxesBlob.set(v)
+
+    var installments: List<InstallmentPlan>
+        get() = installmentsBlob.get()
+        set(v) = installmentsBlob.set(v)
+
+    var installmentPayments: List<InstallmentPayment>
+        get() = installmentPaymentsBlob.get()
+        set(v) = installmentPaymentsBlob.set(v)
 
     /** Last successful fetch, so the app still shows something offline. */
     var cachedRates: Rates
@@ -931,7 +1018,7 @@ class Store(context: Context) {
  * key is a deliberate decision here rather than a drive-by.
  */
 val EXPORTED_PREFS: List<String> = listOf(
-    "holdings", "overrides", "history", "bankAccounts", "disabledBanks",
+    "holdings", "boxTransfers", "mixedBoxes", "installments", "installmentPayments", "overrides", "history", "bankAccounts", "disabledBanks",
     "seenSms", "smsScannedTo", "smsSchema", "smsFoldNeedsRefresh", "extraBankNumbers", "dismissedSenders",
     "name", "themeMode", "lockEnabled", "widgetLock", "onboarded", "smsEnabled",
     "dismissedUpdate", "reportExcluded",

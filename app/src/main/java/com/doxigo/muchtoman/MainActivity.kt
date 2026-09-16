@@ -73,6 +73,9 @@ class AppVm(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(
         UiState(
             holdings = store.holdings,
+            mixedBoxes = store.mixedBoxes,
+            installments = store.installments,
+            installmentPayments = store.installmentPayments,
             rates = store.cachedRates,
             tse = store.cachedStocks,
             overrides = store.overrides,
@@ -297,9 +300,57 @@ class AppVm(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(dismissedUpdate = version) }
     }
 
-    fun setHolding(key: String, typeId: String, amount: Double) {
-        saveHolding(key, typeId, amount, wallet = null)
+    fun setHolding(key: String, typeId: String, amount: Double, boxId: String = "") {
+        saveHolding(key, typeId, amount, wallet = null, boxId = boxId)
         _state.update { it.copy(walletErrors = it.walletErrors - key) }
+    }
+
+    fun addMixedBox(name: String) {
+        val box = runCatching { MixedBox(uuid7(System.currentTimeMillis()), name.trim().take(32)) }.getOrNull() ?: return
+        val next = store.mixedBoxes + box
+        store.mixedBoxes = next
+        _state.update { it.copy(mixedBoxes = next) }
+    }
+
+    /** Moves a native amount between two manually managed boxes of the same asset. */
+    fun transferBoxes(fromKey: String, toKey: String, amount: Double) {
+        val current = _state.value.holdings
+        // A linked wallet's balance comes from the chain, not from this screen; changing it here
+        // would be an invented balance. Cross-unit conversions need a recorded rate, not a
+        // silent subtraction and addition.
+        val next = moveBetweenBoxes(current, fromKey, toKey, amount) ?: return
+        store.boxTransfers = (store.boxTransfers + BoxTransfer(
+            id = uuid7(System.currentTimeMillis()), fromKey = fromKey, toKey = toKey,
+            amount = amount, at = System.currentTimeMillis(),
+        )).takeLast(500)
+        persist(catalogOrdered(next))
+    }
+
+    fun addInstallment(title: String, paymentRial: Long, count: Int, firstDueDay: Long) {
+        val plan = runCatching {
+            InstallmentPlan(uuid7(System.currentTimeMillis()), title.trim().take(40), paymentRial, count, firstDueDay)
+        }.getOrNull() ?: return
+        val next = store.installments + plan
+        store.installments = next
+        _state.update { it.copy(installments = next) }
+    }
+
+    /** A payment is taken from a Toman box and written as one partial installment payment. */
+    fun payInstallment(planId: String, boxKey: String, amountRial: Long) {
+        if (amountRial <= 0L) return
+        val plan = store.installments.firstOrNull { it.id == planId } ?: return
+        val remaining = installmentProgress(plan, store.installmentPayments, tehranDay(System.currentTimeMillis())).remainingRial
+        val box = _state.value.holdings.firstOrNull { it.key == boxKey } ?: return
+        // The ledger keeps money in Rial while a Toman box is worth ten Rial per shown unit.
+        if (box.typeId != TOMAN_ID || box.wallet != null || amountRial > remaining || box.amount * 10.0 < amountRial) return
+        val nextBoxes = _state.value.holdings.map {
+            if (it.key == boxKey) it.copy(amount = it.amount - amountRial / 10.0) else it
+        }
+        val payment = InstallmentPayment(plan.id, amountRial, tehranDay(System.currentTimeMillis()))
+        val payments = store.installmentPayments + payment
+        store.installmentPayments = payments
+        _state.update { it.copy(installmentPayments = payments) }
+        persist(catalogOrdered(nextBoxes))
     }
 
     /** Her own name for a holding, or blank to go back to the asset's own. */
@@ -314,14 +365,22 @@ class AppVm(app: Application) : AndroidViewModel(app) {
      * is how a second Tether beside the first one gets made: the picker hands out a fresh key
      * rather than the asset's own, so nothing here can find the holding she already had.
      */
-    private fun saveHolding(key: String, typeId: String, amount: Double, wallet: WalletLink?) {
+    private fun saveHolding(
+        key: String,
+        typeId: String,
+        amount: Double,
+        wallet: WalletLink?,
+        boxId: String? = null,
+    ) {
         val list = _state.value.holdings
         // Copied, not rebuilt: editing the amount must not quietly un-exclude a set-aside
         // asset, nor drop the name she gave it.
         val next = if (list.any { it.key == key }) {
-            list.map { if (it.key == key) it.copy(amount = amount, wallet = wallet) else it }
+            list.map {
+                if (it.key == key) it.copy(amount = amount, wallet = wallet, boxId = boxId ?: it.boxId) else it
+            }
         } else {
-            list + Holding(typeId = typeId, amount = amount, wallet = wallet, id = key)
+            list + Holding(typeId = typeId, amount = amount, wallet = wallet, id = key, boxId = boxId.orEmpty())
         }
         persist(catalogOrdered(next))
     }
@@ -380,6 +439,7 @@ class AppVm(app: Application) : AndroidViewModel(app) {
         typeId: String,
         option: WalletOption,
         address: String,
+        boxId: String = "",
         onSuccess: () -> Unit,
     ) {
         if (key in _state.value.refreshingWallets) return
@@ -403,6 +463,7 @@ class AppVm(app: Application) : AndroidViewModel(app) {
                         typeId,
                         balance.amount,
                         wallet.copy(updatedAt = balance.updatedAt),
+                        boxId,
                     )
                     _state.update {
                         it.copy(
@@ -2310,6 +2371,9 @@ class AppVm(app: Application) : AndroidViewModel(app) {
 
 data class UiState(
     val holdings: List<Holding> = emptyList(),
+    val mixedBoxes: List<MixedBox> = emptyList(),
+    val installments: List<InstallmentPlan> = emptyList(),
+    val installmentPayments: List<InstallmentPayment> = emptyList(),
     val rates: Rates = Rates(),
     val overrides: Map<String, Double> = emptyMap(),
     val loading: Boolean = false,

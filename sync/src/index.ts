@@ -27,11 +27,12 @@ const MAX_RECORDS_PER_PUSH = 500;
 const MAX_PULL_RECORD_BYTES = 768 * 1024;
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_SCOPE_CHARS = 128;
-// A household is a family, not a tenant: sixteen devices and a hundred and twenty thousand
-// records are an order of magnitude past any real household, and a bound that exists is what
-// keeps one hijacked token from growing a Durable Object without limit.
+// This edition is deliberately a shared ledger for two people, not a general family service.
+// Devices are still distinct from people: a browser or replacement phone is a device, while the
+// member id is who can see and change the shared ledger.
 const MAX_RECORD_ROWS = 120_000;
 const MAX_DEVICES = 16;
+const MAX_MEMBERS = 2;
 // LWW griefing/skew bound: a stamp from the far future would win every merge for ever, so
 // nothing may claim to be written more than a day ahead of this server's clock. The clamped
 // value is returned to the pusher so both sides converge on the same stamp.
@@ -373,6 +374,13 @@ export class Household extends DurableObject<Env> {
   /** A one-time code an existing device shows, which the new one redeems for a token of its own. */
   private async invite(request: Request): Promise<Response> {
     const auth = await this.authorise(request);
+    const members = [...this.sql.exec<{ n: number }>(
+      'SELECT COUNT(DISTINCT member_id) AS n FROM device',
+    )][0];
+    // A code that can only be refused at redemption is a confusing promise on the owner's screen.
+    // `pair` repeats this check because a code may have been minted just before the second member
+    // joined, or two redemptions may race.
+    if (members && members.n >= MAX_MEMBERS) throw new SyncError('too_many_members', 409);
     const body = JSON.parse((await readTextLimited(request, 4096)) || '{}') as Record<string, unknown>;
     const scopes = Array.isArray(body.scopes)
       ? (body.scopes as string[]).filter((s) => auth.scopes.includes(s))
@@ -413,6 +421,10 @@ export class Household extends DurableObject<Env> {
       memberId,
     )][0];
     if (identityCollision && identityCollision.n > 0) throw new SyncError('identity_exists', 409);
+    const members = [...this.sql.exec<{ n: number }>(
+      'SELECT COUNT(DISTINCT member_id) AS n FROM device',
+    )][0];
+    if (members && members.n >= MAX_MEMBERS) throw new SyncError('too_many_members', 409);
     const devices = [...this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM device')][0];
     if (devices && devices.n >= MAX_DEVICES) throw new SyncError('too_many_devices', 409);
     const secret = randomToken();

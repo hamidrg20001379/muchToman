@@ -79,7 +79,7 @@ enum class Tab(val fa: String) {
     HOME("خانه"),
     LEDGER("دفتر"),
     BUDGET("آینده"),
-    ASSETS("دارایی"),
+    ASSETS("باکس‌ها"),
     REPORT("گزارش"),
 }
 

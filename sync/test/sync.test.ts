@@ -706,13 +706,17 @@ describe('abuse resistance', () => {
       memberId: 'b3'.repeat(16),
       deviceId: 'b4'.repeat(16),
     });
-    for (let i = 0; i < 15; i++) {
-      await pairDevice(
-        owner.token,
-        (0xa0 + i).toString(16).repeat(16),
-        (0xc0 + i).toString(16).repeat(16),
+    // The two-person cap is not a substitute for the device cap. Seed additional devices for
+    // the founder directly: pairing them would correctly create new members and hit that other
+    // limit first, leaving this abuse boundary untested.
+    const stub = env.HOUSEHOLD.getByName('b2'.repeat(16));
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 15)
+         INSERT INTO device (id, member_id, token_hash, scopes, added_at, last_seen)
+         SELECT 'seed-device-' || i, '${owner.memberId}', 'seed', '[]', i, i FROM n`,
       );
-    }
+    });
     const invite = await SELF.fetch('https://sync.test/v1/invite', {
       method: 'POST',
       headers: { authorization: `Bearer ${owner.token}` },
@@ -726,6 +730,34 @@ describe('abuse resistance', () => {
     });
     expect(refused.status).toBe(409);
     expect(((await refused.json()) as { code: string }).code).toBe('too_many_devices');
+  });
+
+  it('caps a personal ledger at two members before minting another invitation', async () => {
+    const owner = await claimDevice('b7'.repeat(16), ['family:b7'], {
+      memberId: 'b8'.repeat(16),
+      deviceId: 'b9'.repeat(16),
+    });
+    // This is the race the repeated check in `pair` protects: the code was made while there was
+    // space, then another person joined before it was redeemed.
+    const pending = await SELF.fetch('https://sync.test/v1/invite', {
+      method: 'POST', headers: { authorization: `Bearer ${owner.token}` }, body: JSON.stringify({}),
+    });
+    const { code } = (await pending.json()) as { code: string };
+    await pairDevice(owner.token, 'ba'.repeat(16), 'bb'.repeat(16));
+    const raced = await SELF.fetch('https://sync.test/v1/pair', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ code, memberId: 'bc'.repeat(16), deviceId: 'bd'.repeat(16) }),
+    });
+    expect(raced.status).toBe(409);
+    expect(((await raced.json()) as { code: string }).code).toBe('too_many_members');
+    const invite = await SELF.fetch('https://sync.test/v1/invite', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({}),
+    });
+    expect(invite.status).toBe(409);
+    expect(((await invite.json()) as { code: string }).code).toBe('too_many_members');
   });
 
   it('clamps a far-future stamp and returns the value it stored', async () => {

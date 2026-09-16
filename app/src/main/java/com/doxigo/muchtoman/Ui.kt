@@ -33,6 +33,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -257,6 +258,128 @@ internal fun bandShape(index: Int, count: Int): Shape {
  */
 private data class Editing(val typeId: String, val key: String)
 
+/** A transfer is one native amount between two compatible, manually controlled boxes. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BoxTransferSheet(
+    boxes: List<Pair<Holding, String>>,
+    onSave: (fromKey: String, toKey: String, amount: Double) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var fromKey by remember(boxes) { mutableStateOf(boxes.firstOrNull()?.first?.key.orEmpty()) }
+    var toKey by remember(boxes) {
+        mutableStateOf(boxes.firstOrNull { it.first.key != fromKey }?.first?.key.orEmpty())
+    }
+    var amountText by remember { mutableStateOf("") }
+    val from = boxes.firstOrNull { it.first.key == fromKey }?.first
+    val compatible = boxes.filter { from != null && it.first.typeId == from.typeId && it.first.key != fromKey }
+    LaunchedEffect(fromKey, compatible.map { it.first.key }) {
+        if (toKey !in compatible.map { it.first.key }) toKey = compatible.firstOrNull()?.first?.key.orEmpty()
+    }
+    val amount = parseAmount(amountText)
+    val valid = from != null && toKey.isNotBlank() && amount != null && amount > 0.0 && amount <= from.amount
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().navigationBarsPadding()
+                .verticalScroll(rememberScrollState()).padding(horizontal = Space.xl, vertical = Space.s),
+        ) {
+            SheetTitle("انتقال بین باکس‌ها")
+            Text(
+                "فقط بین باکس‌های هم‌واحد منتقل می‌شه؛ تبدیل دلار یا طلا نرخ ثبت‌شدهٔ جدا می‌خواد.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                lineHeight = 22.sp,
+                modifier = Modifier.padding(top = Space.s),
+            )
+            SheetLabel("از کدوم باکس؟")
+            boxes.forEach { (box, name) ->
+                Row(
+                    Modifier.fillMaxWidth().selectable(selected = fromKey == box.key, role = Role.RadioButton) {
+                        fromKey = box.key
+                    }.padding(vertical = Space.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = fromKey == box.key, onClick = { fromKey = box.key })
+                    Text("$name • ${faNumber(box.amount)}", modifier = Modifier.padding(start = Space.s))
+                }
+            }
+            SheetLabel("به کدوم باکس؟")
+            if (compatible.isEmpty()) {
+                Text("یه باکس دیگه با همین واحد لازم داری.", color = MaterialTheme.colorScheme.error)
+            } else compatible.forEach { (box, name) ->
+                Row(
+                    Modifier.fillMaxWidth().selectable(selected = toKey == box.key, role = Role.RadioButton) {
+                        toKey = box.key
+                    }.padding(vertical = Space.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = toKey == box.key, onClick = { toKey = box.key })
+                    Text("$name • ${faNumber(box.amount)}", modifier = Modifier.padding(start = Space.s))
+                }
+            }
+            SheetLabel("چقدر؟")
+            OutlinedTextField(
+                value = amountText,
+                onValueChange = { amountText = it },
+                singleLine = true,
+                isError = amountText.isNotBlank() && !valid,
+                visualTransformation = GroupedNumber,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                supportingText = if (amountText.isNotBlank() && !valid) ({
+                    Text(if (amount != null && from != null && amount > from.amount) "موجودی این باکس کافی نیست."
+                    else "یک مقدار معتبر وارد کن.")
+                }) else null,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = { onSave(fromKey, toKey, amount!!) },
+                enabled = valid,
+                colors = ButtonDefaults.buttonColors(containerColor = Cta.fill, contentColor = Cta.ink),
+                modifier = Modifier.fillMaxWidth().padding(top = Space.xl),
+            ) { Text("انتقال", fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.height(Space.l))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MixedBoxSheet(onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    val valid = name.trim().isNotBlank()
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().navigationBarsPadding()
+                .padding(horizontal = Space.xl, vertical = Space.s),
+        ) {
+            SheetTitle("باکس چندارزی")
+            Text(
+                "دارایی‌های هر واحد جدا می‌مونن و جمع با نرخ روز به تومان نشون داده می‌شه.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                lineHeight = 22.sp,
+                modifier = Modifier.padding(top = Space.s),
+            )
+            SheetLabel("اسم باکس")
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.take(32) },
+                singleLine = true,
+                placeholder = { Text("مثلاً پس‌انداز سفر") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = { onSave(name) },
+                enabled = valid,
+                colors = ButtonDefaults.buttonColors(containerColor = Cta.fill, contentColor = Cta.ink),
+                modifier = Modifier.fillMaxWidth().padding(top = Space.xl),
+            ) { Text("ساخت باکس", fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.height(Space.l))
+        }
+    }
+}
+
 /**
  * The marks she chose are put in scope once, here, rather than passed to every screen that draws
  * one — see [LocalCustomGlyphs] for why that is the shape of it.
@@ -401,6 +524,8 @@ private fun AppScreens(
     val backupState by vm.backup.collectAsStateWithLifecycle()
     var adding by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Editing?>(null) }
+    var transferringBoxes by remember { mutableStateOf(false) }
+    var addingMixedBox by remember { mutableStateOf(false) }
     // Saveable, like tab and transactionRef below: these four are *where she is standing*, and
     // a process death that threw her from دسته‌بندی‌ها back to the asset list read as the app
     // restarting itself. (The manifest's ponytail about half-typed sheet text still stands —
@@ -710,8 +835,12 @@ private fun AppScreens(
         (state.coins.map { it.toAssetType() } + state.stocks.map { it.toAssetType() })
             .associateBy { it.id }
     }
-    val holdingSections = remember(state.listHoldings, dynamicTypes) {
-        holdingsByKind(state.listHoldings, dynamicTypes)
+    val mixedBoxIds = remember(state.mixedBoxes) { state.mixedBoxes.mapTo(mutableSetOf()) { it.id } }
+    val mixedBoxMembers = remember(state.listHoldings, mixedBoxIds) {
+        state.listHoldings.filter { it.boxId in mixedBoxIds }.groupBy { it.boxId }
+    }
+    val holdingSections = remember(state.listHoldings, mixedBoxIds, dynamicTypes) {
+        holdingsByKind(state.listHoldings.filter { it.boxId !in mixedBoxIds }, dynamicTypes)
     }
 
     Scaffold(
@@ -769,6 +898,9 @@ private fun AppScreens(
           BudgetScreen(
             budgets = state.ledger.budgets,
             goals = state.ledger.goals,
+            installments = state.installments,
+            installmentPayments = state.installmentPayments,
+            tomanBoxes = state.holdings.filter { it.typeId == TOMAN_ID && it.wallet == null },
             categories = state.ledger.categories,
             // The same set دخل و خرج reads — the figures on these cards were measured against
             // it, and the total's sheet says so in words. See [budgetTotalNoteFa].
@@ -786,6 +918,8 @@ private fun AppScreens(
             onKeepBudget = vm::keepBudget,
             onAddGoal = vm::addGoal,
             onEditGoal = vm::editGoal,
+            onAddInstallment = vm::addInstallment,
+            onPayInstallment = vm::payInstallment,
             onDelete = vm::deleteGoal,
             onAskNotify = askNotify,
             bottomInset = pad.calculateBottomPadding(),
@@ -958,6 +1092,14 @@ private fun AppScreens(
                         onClick = { adding = true; vm.refreshStocksForPicker() },
                         modifier = cell,
                     )
+                    if (portfolio && state.holdings.count { it.wallet == null } >= 2) {
+                        ActionCircle(
+                            label = "انتقال",
+                            icon = Icons.Rounded.Refresh,
+                            onClick = { transferringBoxes = true },
+                            modifier = cell,
+                        )
+                    }
                     if (!portfolio) {
                         // Money no message will report, written down where she is standing.
                         ActionCircle(
@@ -982,6 +1124,15 @@ private fun AppScreens(
                         onClick = vm::refreshAll,
                         modifier = cell,
                     )
+                }
+            }
+
+            if (portfolio) {
+                item(key = "mixed_box_action") {
+                    TextButton(
+                        onClick = { addingMixedBox = true },
+                        modifier = Modifier.padding(horizontal = edge).fillMaxWidth(),
+                    ) { Text("باکس چندارزی بساز", fontSize = 14.sp) }
                 }
             }
 
@@ -1052,9 +1203,46 @@ private fun AppScreens(
                         MissingNote(state.totals.missing, state.coins, state.stocks)
                     }
                 }
-            } else if (state.listHoldings.isEmpty()) {
+            } else if (state.listHoldings.isEmpty() && state.mixedBoxes.isEmpty()) {
                 item { EmptyHint() }
             } else {
+                state.mixedBoxes.forEach { box ->
+                    val held = mixedBoxMembers[box.id].orEmpty()
+                    item(key = "mixed_box_${box.id}") {
+                        SectionHead(
+                            title = box.name,
+                            subtotal = computeTotals(held, effective).toman.takeIf { held.isNotEmpty() },
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                    if (held.isEmpty()) {
+                        item(key = "mixed_box_empty_${box.id}") {
+                            Text(
+                                "برای اضافه کردن دارایی، یک مورد رو باز کن و این باکس رو انتخاب کن.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(horizontal = edge, vertical = Space.m),
+                            )
+                        }
+                    } else itemsIndexed(held, key = { _, h -> "mixed_${box.id}_${h.key}" }) { i, h ->
+                        val type = resolveType(h.typeId, dynamicTypes)
+                        HoldingRow(
+                            type = type,
+                            name = h.nameOr(type.fa),
+                            amount = h.amount,
+                            rate = effective[h.typeId],
+                            excluded = h.excluded,
+                            onClick = { if (h.typeId == BANK_ID) banks = true else editing = Editing(h.typeId, h.key) },
+                            note = if (h.typeId == BANK_ID) bankNote(state) else null,
+                            wallet = h.wallet,
+                            walletRefreshing = h.key in state.refreshingWallets,
+                            walletError = state.walletErrors[h.key],
+                            shape = bandShape(i, held.size),
+                            divided = i < held.size - 1,
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                }
                 // Dollars, gold, coins and crypto used to arrive as one undifferentiated stack
                 // of cards. Banding them by kind separates them without moving anything: the
                 // sections come out in the order the holdings are already stored in.
@@ -1203,11 +1391,12 @@ private fun AppScreens(
             excluded = held?.excluded ?: false,
             walletBusy = key in state.refreshingWallets,
             walletError = state.walletErrors[key],
+            mixedBoxes = state.mixedBoxes,
             onWalletEdit = { vm.clearWalletError(key) },
             onExcluded = { on -> vm.setExcluded(key, on) },
-            onSaveManual = { amount -> vm.setHolding(key, typeId, amount); editing = null },
-            onSaveWallet = { option, address, onSuccess ->
-                vm.connectWallet(key, typeId, option, address, onSuccess)
+            onSaveManual = { amount, boxId -> vm.setHolding(key, typeId, amount, boxId); editing = null },
+            onSaveWallet = { option, address, boxId, onSuccess ->
+                vm.connectWallet(key, typeId, option, address, boxId, onSuccess)
             },
             onDelete = {
                 // The whole Holding, captured before the removal — amount, label, wallet link
@@ -1221,6 +1410,27 @@ private fun AppScreens(
             onRate = { r -> vm.setOverride(typeId, r) },
             onLabel = { name -> vm.setLabel(key, name) },
             onDismiss = { editing = null },
+        )
+    }
+
+    if (transferringBoxes) {
+        val boxes = state.holdings.filter { it.wallet == null }.map { holding ->
+            holding to holding.nameOr(resolveType(holding.typeId, dynamicTypes).fa)
+        }
+        BoxTransferSheet(
+            boxes = boxes,
+            onSave = { from, to, amount ->
+                transferringBoxes = false
+                vm.transferBoxes(from, to, amount)
+            },
+            onDismiss = { transferringBoxes = false },
+        )
+    }
+
+    if (addingMixedBox) {
+        MixedBoxSheet(
+            onSave = { name -> vm.addMixedBox(name); addingMixedBox = false },
+            onDismiss = { addingMixedBox = false },
         )
     }
 }
@@ -3457,10 +3667,11 @@ private fun EditSheet(
     excluded: Boolean,
     walletBusy: Boolean,
     walletError: String?,
+    mixedBoxes: List<MixedBox>,
     onWalletEdit: () -> Unit,
     onExcluded: (Boolean) -> Unit,
-    onSaveManual: (Double) -> Unit,
-    onSaveWallet: (WalletOption, String, () -> Unit) -> Unit,
+    onSaveManual: (Double, String) -> Unit,
+    onSaveWallet: (WalletOption, String, String, () -> Unit) -> Unit,
     onDelete: () -> Unit,
     onRate: (Double?) -> Unit,
     onLabel: (String) -> Unit,
@@ -3502,6 +3713,9 @@ private fun EditSheet(
         mutableStateOf(linkedWallet?.network ?: walletOptions.firstOrNull()?.network.orEmpty())
     }
     var localWalletError by remember { mutableStateOf<String?>(null) }
+    var boxId by remember(key, holding?.boxId, mixedBoxes) { mutableStateOf(holding?.boxId.orEmpty()) }
+    val boxIds = remember(mixedBoxes) { mixedBoxes.map { it.id }.toSet() }
+    LaunchedEffect(boxIds) { if (boxId.isNotBlank() && boxId !in boxIds) boxId = "" }
 
     val manualAmount = parseAmount(text)
     val selectedWallet = walletOptions.firstOrNull { it.network == selectedNetwork }
@@ -3577,6 +3791,17 @@ private fun EditSheet(
                         )
                     }
                 }
+            }
+
+            if (mixedBoxes.isNotEmpty()) {
+                SheetLabel("داخل کدوم باکس؟")
+                ChipChoice(
+                    options = listOf("") + mixedBoxes.map { it.id },
+                    selected = boxId,
+                    label = { id -> mixedBoxes.firstOrNull { it.id == id }?.name ?: "بیرون باکس" },
+                    onSelect = { boxId = it },
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                )
             }
 
             // Named, not renamed: the asset keeps its own name everywhere else, and this is
@@ -4067,7 +4292,7 @@ private fun EditSheet(
                     // and while adding there is no such row until this save makes one.
                     if (source == AmountSource.MANUAL) {
                         manualSubmitted = true
-                        if (manualAmount != null) close { onSaveManual(manualAmount); nameIt() }
+                        if (manualAmount != null) close { onSaveManual(manualAmount, boxId); nameIt() }
                         else amountFocus.requestFocus()
                     } else {
                         val option = selectedWallet ?: return@Button
@@ -4078,7 +4303,7 @@ private fun EditSheet(
                             localWalletError = "این آدرس با شبکه انتخاب‌شده جور نیست."
                             walletAddressFocus.requestFocus()
                         } else {
-                            onSaveWallet(option, walletAddress.trim()) { nameIt(); close(onDismiss) }
+                            onSaveWallet(option, walletAddress.trim(), boxId) { nameIt(); close(onDismiss) }
                         }
                     }
                 },

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -117,6 +118,9 @@ private fun budgetTone(level: Int): Color = when (level) {
 fun BudgetScreen(
     budgets: List<BudgetProgress>,
     goals: List<GoalProgress>,
+    installments: List<InstallmentPlan>,
+    installmentPayments: List<InstallmentPayment>,
+    tomanBoxes: List<Holding>,
     categories: List<Category>,
     /**
      * The categories دخل و خرج leaves out, because they are the ones «کل خرج» leaves out too —
@@ -140,6 +144,8 @@ fun BudgetScreen(
     onEditBudget: (String, BudgetPeriod, Long, Boolean) -> Unit,
     onAddGoal: (String, Long, GoalHorizon, Boolean) -> Unit,
     onEditGoal: (String, String, Long, GoalHorizon?, Boolean) -> Unit,
+    onAddInstallment: (String, Long, Int, Long) -> Unit,
+    onPayInstallment: (String, String, Long) -> Unit,
     onDelete: (String) -> Unit,
     onKeepBudget: (String) -> Unit,
     onAskNotify: () -> Unit,
@@ -147,6 +153,8 @@ fun BudgetScreen(
 ) {
     var addingBudget by remember { mutableStateOf(false) }
     var addingGoal by remember { mutableStateOf(false) }
+    var addingInstallment by remember { mutableStateOf(false) }
+    var payingInstallment by remember { mutableStateOf<String?>(null) }
     // The id, not the progress: the ledger can republish under an open sheet — a message
     // arriving, a receipt refiled on the other phone — and a held snapshot would pin the sheet
     // to figures the screen behind it no longer shows. Resolved fresh each pass; a budget
@@ -255,6 +263,33 @@ fun BudgetScreen(
                 onClick = { addingGoal = true },
             )
 
+            SectionLabel("قسط‌ها")
+            if (installments.isEmpty()) {
+                Text(
+                    "قسط‌هات رو اینجا نگه دار. پرداخت ناقص هم می‌تونه از یک باکس تومنی کم بشه.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 26.sp,
+                )
+                Spacer(Modifier.height(Space.l))
+            }
+            val today = tehranDay(System.currentTimeMillis())
+            val installmentRows = installments.size + 1
+            installments.forEachIndexed { i, plan ->
+                val progress = installmentProgress(plan, installmentPayments, today)
+                InstallmentCard(
+                    plan = plan,
+                    progress = progress,
+                    shape = bandShape(i, installmentRows),
+                    divided = true,
+                    onPay = { payingInstallment = plan.id },
+                )
+            }
+            AddRow(
+                label = if (installments.isEmpty()) "اولین قسط" else "قسط تازه",
+                shape = bandShape(installments.size, installmentRows),
+                onClick = { addingInstallment = true },
+            )
+
             Spacer(Modifier.height(Space.huge))
         }
     }
@@ -319,6 +354,28 @@ fun BudgetScreen(
                 editingGoal = null
                 onDelete(progress.goal.id)
             },
+        )
+    }
+
+    if (addingInstallment) {
+        InstallmentSheet(
+            onSave = { name, amount, count ->
+                addingInstallment = false
+                onAddInstallment(name, amount, count, tehranDay(System.currentTimeMillis()))
+            },
+            onDismiss = { addingInstallment = false },
+        )
+    }
+
+    installments.firstOrNull { it.id == payingInstallment }?.let { plan ->
+        InstallmentPaymentSheet(
+            plan = plan,
+            boxes = tomanBoxes,
+            onSave = { box, amount ->
+                payingInstallment = null
+                onPayInstallment(plan.id, box, amount)
+            },
+            onDismiss = { payingInstallment = null },
         )
     }
 }
@@ -695,6 +752,143 @@ private fun GoalCard(progress: GoalProgress, shape: Shape, divided: Boolean, onO
                 fontWeight = if (loud) FontWeight.Bold else FontWeight.Normal,
                 color = if (loud) tone else MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun InstallmentCard(
+    plan: InstallmentPlan,
+    progress: InstallmentProgress,
+    shape: Shape,
+    divided: Boolean,
+    onPay: () -> Unit,
+) {
+    Surface(
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = Space.l, vertical = Space.m)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(plan.titleFa, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "${faCompact(tomanOf(plan.paymentRial))} تومان • ${faNumber(progress.dueCount.toDouble())} از ${faNumber(plan.count.toDouble())} سررسید",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp,
+                    )
+                }
+                if (!progress.complete) {
+                    TextButton(onClick = onPay) { Text("پرداخت") }
+                }
+            }
+            Text(
+                when {
+                    progress.complete -> "کامل پرداخت شد"
+                    progress.overdueRial > 0 -> "${faCompact(tomanOf(progress.overdueRial))} تومان از سررسیدها مونده"
+                    else -> "${faCompact(tomanOf(progress.remainingRial))} تومان مونده"
+                },
+                color = if (progress.overdueRial > 0) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = Space.xs),
+            )
+            if (divided) HorizontalDivider(Modifier.padding(top = Space.m), color = MaterialTheme.colorScheme.outlineVariant)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InstallmentSheet(
+    onSave: (name: String, paymentRial: Long, count: Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var paymentText by remember { mutableStateOf("") }
+    var countText by remember { mutableStateOf("") }
+    val toman = parseAmount(paymentText)?.takeIf { it > 0 && it <= Long.MAX_VALUE / 10.0 }
+    val paymentRial = toman?.times(10)?.toLong()
+    val count = parseAmount(countText)?.takeIf { it >= 1 && it <= 999 && it % 1.0 == 0.0 }?.toInt()
+    val valid = name.isNotBlank() && paymentRial != null && count != null &&
+        runCatching { Math.multiplyExact(paymentRial, count.toLong()) }.isSuccess
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().navigationBarsPadding()
+                .verticalScroll(rememberScrollState()).padding(horizontal = Space.xl, vertical = Space.s),
+        ) {
+            SheetTitle("قسط تازه")
+            Text("اولین سررسید امروز ثبت می‌شه؛ یادآوری خودکار این نسخه خاموشه.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, lineHeight = 22.sp)
+            SheetLabel("برای چی؟")
+            OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            SheetLabel("هر قسط چقدر تومنه؟")
+            OutlinedTextField(
+                value = paymentText, onValueChange = { paymentText = it }, singleLine = true,
+                visualTransformation = GroupedNumber, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SheetLabel("چند قسط؟")
+            OutlinedTextField(
+                value = countText, onValueChange = { countText = it }, singleLine = true,
+                visualTransformation = GroupedNumber, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = { onSave(name, paymentRial!!, count!!) }, enabled = valid,
+                colors = ButtonDefaults.buttonColors(containerColor = Cta.fill, contentColor = Cta.ink),
+                modifier = Modifier.fillMaxWidth().padding(top = Space.xl),
+            ) { Text("ذخیره", fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.height(Space.l))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InstallmentPaymentSheet(
+    plan: InstallmentPlan,
+    boxes: List<Holding>,
+    onSave: (boxKey: String, amountRial: Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var boxKey by remember(boxes) { mutableStateOf(boxes.firstOrNull()?.key.orEmpty()) }
+    var amountText by remember { mutableStateOf("") }
+    val box = boxes.firstOrNull { it.key == boxKey }
+    val toman = parseAmount(amountText)?.takeIf { it > 0 && it <= Long.MAX_VALUE / 10.0 }
+    val amountRial = toman?.times(10)?.toLong()
+    val valid = box != null && amountRial != null && box.amount * 10.0 >= amountRial
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().navigationBarsPadding()
+                .verticalScroll(rememberScrollState()).padding(horizontal = Space.xl, vertical = Space.s),
+        ) {
+            SheetTitle("پرداخت ${plan.titleFa}")
+            if (boxes.isEmpty()) {
+                Text("اول یک باکس تومنیِ دستی اضافه کن.", color = MaterialTheme.colorScheme.error)
+            } else {
+                SheetLabel("از کدوم باکس؟")
+                ChipChoice(
+                    options = boxes,
+                    selected = box ?: boxes.first(),
+                    label = { it.nameOr("باکس تومنی") },
+                    onSelect = { boxKey = it.key },
+                )
+                SheetLabel("چقدر تومن؟")
+                OutlinedTextField(
+                    value = amountText, onValueChange = { amountText = it }, singleLine = true,
+                    visualTransformation = GroupedNumber, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    supportingText = if (amountText.isNotBlank() && !valid) ({ Text("موجودی باکس کافی نیست.") }) else null,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = { onSave(boxKey, amountRial!!) }, enabled = valid,
+                    colors = ButtonDefaults.buttonColors(containerColor = Cta.fill, contentColor = Cta.ink),
+                    modifier = Modifier.fillMaxWidth().padding(top = Space.xl),
+                ) { Text("ثبت پرداخت", fontWeight = FontWeight.Bold) }
+            }
+            Spacer(Modifier.height(Space.l))
         }
     }
 }
