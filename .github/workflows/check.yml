@@ -34,6 +34,18 @@ jobs:
       - name: Unit tests and lint
         run: ./gradlew testFullDebugUnitTest testLiteDebugUnitTest lint assembleDebug
 
+      # The APKs are the useful output of the debug build above. Keeping this in the same job
+      # means one push does one Android build, and the Actions page has both installable editions.
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: muchtoman-debug-apks
+          path: |
+            app/build/outputs/apk/full/debug/app-full-debug.apk
+            app/build/outputs/apk/lite/debug/app-lite-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
   worker:
     runs-on: ubuntu-latest
     steps:
