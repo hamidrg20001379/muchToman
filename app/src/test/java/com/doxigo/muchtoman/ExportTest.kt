@@ -216,7 +216,10 @@ class ExportTest {
     fun `the exported and excluded pref lists are pinned`() {
         assertEquals(
             listOf(
-                "holdings", "overrides", "history", "bankAccounts", "disabledBanks",
+                // Boxes and installment payments are user-entered records, not recomputable
+                // price caches, so a backup must bring their balances and audit trail back.
+                "holdings", "boxTransfers", "mixedBoxes", "installments", "installmentPayments",
+                "overrides", "history", "bankAccounts", "disabledBanks",
                 "seenSms", "smsScannedTo", "smsSchema", "smsFoldNeedsRefresh", "extraBankNumbers", "dismissedSenders",
                 "name", "themeMode", "lockEnabled", "widgetLock", "onboarded", "smsEnabled",
                 "dismissedUpdate", "reportExcluded",
